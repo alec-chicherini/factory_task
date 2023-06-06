@@ -9,5 +9,7 @@ mkdir build
 cd build
 cmake ..
 cmake --build .
-.\Debug\factory_task.exe
+cd Debug
+./factory_task.exe
+echo done
 ```
