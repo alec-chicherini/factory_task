@@ -7,9 +7,11 @@
 #include <cassert>
 #include <iomanip> ///std::setprecision
 #include <mutex>
+#include <thread>
 
 using std::cout;
 using std::endl;
+using std::osyncstream;
 
 int GetRandomNumber(int from, int to) {
 	std::random_device random_device_;
@@ -125,56 +127,104 @@ struct Storage {
 	std::queue<ConcreteItemPtr> queue_;
 	std::vector<Shop> shops_;
 	std::mutex mtx_capacity;
+	std::mutex mtx_queue;
 
 	Storage(double capacity_limit):capacity_limit_(capacity_limit) {
 		size_t number_of_shops = static_cast<size_t>(GetRandomNumber(5, 10));
 		shops_ = std::vector<Shop>(number_of_shops);
 	};
 
-	void StoreItem(ConcreteItemPtr concrete_item) {
-		queue_.push(concrete_item);
-		capacity_now_ += concrete_item->item_.weight;
+	void PlusCapacity(double value) {
+		std::lock_guard lock(mtx_capacity);
+		capacity_now_ = capacity_now_ + value;
+	};
+	void MinusCapacity(double value) {
+		std::lock_guard lock(mtx_capacity);
+		capacity_now_ = capacity_now_ - value;
+	};
+	double GetCapacity() {
+		std::lock_guard lock (mtx_capacity);
+		return capacity_now_;
+	};
+	void QueuePop() {
+		queue_.pop();
+	}
 
-		while(capacity_now_ > capacity_limit_){
-			Truck truck;
-			while (true) {
-				if (queue_.size() == 0) {
-					break;
-				}
-				auto& item_to_send = queue_.front();
-				double truck_capacity_new = truck.capacity_now_ + item_to_send->item_.weight;
-				if ( CapacityFromTruck(truck) > truck_capacity_new ) {
-					capacity_now_ -= item_to_send->item_.weight;
-					truck.cargo.push_back(item_to_send);
-					truck.capacity_now_ = truck_capacity_new;
-					queue_.pop();
-				}
-				else {
-					size_t random_shop_to_send = static_cast<size_t>(GetRandomNumber(0, (int)shops_.size() - 1));
-					std::cout << "{ " << truck << ", \"items\": [";
-					for (int i = 0; i < truck.cargo.size(); i++) {
-						std::cout << "\"" << truck.cargo[i]->uid_ << "\"";
-						if (i != truck.cargo.size() - 1)std::cout << ",";
-						shops_.at(random_shop_to_send).store.push_back(truck.cargo[i]);
+	void QueuePush(ConcreteItemPtr concrete_item) {
+		std::lock_guard lock(mtx_queue);
+		queue_.push(concrete_item);
+	}
+
+	size_t QueueSize() {
+		return queue_.size();
+	}
+
+	ConcreteItemPtr QueueFront() {
+		return queue_.front();
+	}
+
+	void StoreItem(ConcreteItemPtr concrete_item) {
+		QueuePush(concrete_item);
+		PlusCapacity(concrete_item->item_.weight);
+
+		while(GetCapacity() > capacity_limit_){
+			auto send_items = [this] {
+				Truck truck;
+				while (true) {
+					std::lock_guard lock(mtx_queue);
+					if (QueueSize() == 0) {
+						break;
 					}
-					cout << " ] }"<< endl;
-					break;
+					auto item_to_send = QueueFront();
+					double truck_capacity_new = truck.capacity_now_ + item_to_send->item_.weight;
+					if (CapacityFromTruck(truck) > truck_capacity_new) {
+						MinusCapacity(item_to_send->item_.weight);
+						truck.cargo.push_back(item_to_send);
+						truck.capacity_now_ = truck_capacity_new;
+						QueuePop();
+					}
+					else {
+						size_t random_shop_to_send = static_cast<size_t>(GetRandomNumber(0, (int)shops_.size() - 1));
+						std::stringstream ss;
+						ss << "{ " << truck << ", \"items\": [";
+						for (int i = 0; i < truck.cargo.size(); i++) {
+							ss << "\"" << truck.cargo[i]->uid_ << "\"";
+							if (i != truck.cargo.size() - 1)ss << ",";
+							shops_.at(random_shop_to_send).store.push_back(truck.cargo[i]);
+						}
+						ss << " ] }" << endl;
+
+						osyncstream(cout) << ss.str();
+						break;
+					}
 				}
-			}
+			};
+
+			std::thread thread_sender(send_items);
+			thread_sender.detach();
 		}
 	};
 };
 
 int main() {
+	///CONFIG BEGIN
+	constexpr int MAX_DETACHED_THREADS = 16;
+	constexpr int MAX_NUMBER_OF_FACTORIES = 10;
+	constexpr int MAX_RATE_BASE = 100;
+	constexpr int MAX_STORAGE_MULTIPIYER = 150;
+	constexpr int MIN_HOURS_OF_WORKING = 100;
+	constexpr int MAX_HOURS_OF_WORKING = 10000;
+	///CONFIG END
+
 	///INIT BEGIN
 	std::vector<FactoryPtr> factories;
-	int number_of_factories = GetRandomNumber(3, 10);
-	double rate_base = static_cast<double>(GetRandomNumber(50, 100));
+	int number_of_factories = GetRandomNumber(3, MAX_NUMBER_OF_FACTORIES);
+	double rate_base = static_cast<double>(GetRandomNumber(50, MAX_RATE_BASE));
 	double capacity_production_overall{ 0.0 };
 	while (number_of_factories--) {
 		factories.push_back(std::make_shared<Factory>(Item(), rate_base));
 		if ((std::numeric_limits<double>::max() - factories.back()->rate_) < capacity_production_overall) {
-			cout << "ERROR:Factories have too much production. exit."<<endl;
+			std::cerr << "ERROR:Factories have too much production. exit."<<endl;
 			exit(EXIT_FAILURE);
 		}
 		capacity_production_overall += factories.back()->rate_;
@@ -183,27 +233,47 @@ int main() {
 	cout << "Created " << factories.size() << " factories with rate ["
 		      << factories.front()->rate_ << "," << factories.back()->rate_ << "]" << endl;
 
-	double storage_Multiplier = static_cast<double>(GetRandomNumber(100, 1'000));
+	double storage_Multiplier = static_cast<double>(GetRandomNumber(100, MAX_STORAGE_MULTIPIYER));
 	if ((std::numeric_limits<double>::max()/ capacity_production_overall) < storage_Multiplier) {
-		cout << "ERROR:Storage cant store too much production.exit." << endl;
+		std::cerr << "ERROR:Storage cant store too much production.exit." << endl;
 		exit(EXIT_FAILURE);
 	}
 	Storage store(storage_Multiplier * capacity_production_overall * 0.95);
 	cout << "Created storage with " << store.shops_.size() << " shops. Store capacity limit[95%] = "
 		 << std::setprecision(10) <<store.capacity_limit_ << endl;
 
-	int hours_of_working = GetRandomNumber(100, 1000);
+	int hours_of_working = GetRandomNumber(MIN_HOURS_OF_WORKING, MAX_HOURS_OF_WORKING);
 	cout << "Simulation started for " << hours_of_working << " hours" << endl;
 	///INIT END
 
 	///WORK BEGIN
+	std::atomic<int> detached_thread_counter;
+	constexpr bool WAS_DETACHED = true;
+	constexpr bool WAS_JOINED = false;
+
 	for(int i=1;i<=hours_of_working;i++) {
-		for (auto& f : factories) {
-			auto item = f->produce();
-			cout << "{ \"hour\": " << i 
-				 << ", " << f 
-				 << ", " << item <<" }"<< endl;
-			store.StoreItem(item);
+		auto day_work = [i,&factories, &store,&detached_thread_counter](bool action) {
+			for (auto& f : factories) {
+				auto item = f->produce();
+				osyncstream(cout) << "{ \"hour\": " << i
+					<< ", " << f
+					<< ", " << item << " }" << endl;
+				store.StoreItem(item);
+			}
+			if (action == WAS_DETACHED) {
+				--detached_thread_counter;
+			}
+		};
+
+		if (detached_thread_counter.load() < MAX_DETACHED_THREADS) {
+			std::thread thread_worker(day_work, WAS_DETACHED);
+			thread_worker.detach();
+			++detached_thread_counter;
+		}
+		else {
+			std::thread thread_worker(day_work, WAS_JOINED);
+			thread_worker.join();
+			
 		}
 	}
 	///WORK END
