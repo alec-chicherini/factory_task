@@ -137,54 +137,18 @@ struct Shop {
 };
 
 struct Storage {
-	double capacity_limit_;
-	double capacity_now_{ 0.0 };
-	std::queue<ConcreteItemPtr> queue_;
-	std::vector<Shop> shops_;
-	std::mutex mtx_capacity;
-	std::mutex mtx_queue;
-
 	Storage(double capacity_limit):capacity_limit_(capacity_limit) {
 		size_t number_of_shops = static_cast<size_t>(GetRandomNumber(5, 10));
 		shops_ = std::vector<Shop>(number_of_shops);
 	};
 
-	void PlusCapacity(double value) {
-		std::lock_guard lock(mtx_capacity);
-		capacity_now_ = capacity_now_ + value;
-	};
-	void MinusCapacity(double value) {
-		std::lock_guard lock(mtx_capacity);
-		capacity_now_ = capacity_now_ - value;
-	};
-	double GetCapacity() {
-		std::lock_guard lock (mtx_capacity);
-		return capacity_now_;
-	};
-	void QueuePop() {
-		queue_.pop();
-	}
-
-	void QueuePush(ConcreteItemPtr concrete_item) {
-		std::lock_guard lock(mtx_queue);
-		queue_.push(concrete_item);
-	}
-
-	size_t QueueSize() {
-		return queue_.size();
-	}
-
-	ConcreteItemPtr QueueFront() {
-		return queue_.front();
-	}
-
 	void StoreItem(ConcreteItemPtr concrete_item) {
 		QueuePush(concrete_item);
 		PlusCapacity(concrete_item->item_.weight);
 
-		while(GetCapacity() > capacity_limit_){
+		while (GetCapacity() > capacity_limit_) {
 			auto send_items = [this] {
-				
+
 				while (true) {
 					std::lock_guard lock(mtx_queue);
 					if (QueueSize() == 0) {
@@ -220,6 +184,50 @@ struct Storage {
 			thread_sender.detach();
 		}
 	};
+	size_t GetShopsSize() {
+		return shops_.size();
+	}
+	double GetCapacityLimit() {
+		return capacity_limit_;
+	}
+
+private:
+	double capacity_limit_;
+	double capacity_now_{ 0.0 };
+	std::queue<ConcreteItemPtr> queue_;
+	std::vector<Shop> shops_;
+	std::mutex mtx_capacity;
+	std::mutex mtx_queue;
+
+	void PlusCapacity(double value) {
+		std::lock_guard lock(mtx_capacity);
+		capacity_now_ = capacity_now_ + value;
+	};
+	void MinusCapacity(double value) {
+		std::lock_guard lock(mtx_capacity);
+		capacity_now_ = capacity_now_ - value;
+	};
+	double GetCapacity() {
+		std::lock_guard lock (mtx_capacity);
+		return capacity_now_;
+	};
+	void QueuePop() {
+		queue_.pop();
+	}
+
+	void QueuePush(ConcreteItemPtr concrete_item) {
+		std::lock_guard lock(mtx_queue);
+		queue_.push(concrete_item);
+	}
+
+	size_t QueueSize() {
+		return queue_.size();
+	}
+
+	ConcreteItemPtr QueueFront() {
+		return queue_.front();
+	}
+
 };
 
 int main() {
@@ -255,8 +263,8 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 	Storage store(storage_Multiplier * capacity_production_overall * 0.95);
-	cout << "Created storage with " << store.shops_.size() << " shops. Store capacity limit[95%] = "
-		 << std::setprecision(10) <<store.capacity_limit_ << endl;
+	cout << "Created storage with " << store.GetShopsSize() << " shops. Store capacity limit[95%] = "
+		 << std::setprecision(10) <<store.GetCapacityLimit() << endl;
 
 	int hours_of_working = GetRandomNumber(MIN_HOURS_OF_WORKING, MAX_HOURS_OF_WORKING);
 	cout << "Simulation started for " << hours_of_working << " hours" << endl;
