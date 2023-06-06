@@ -730,5 +730,4 @@ cpp-backend-tests-practicum
 # XML Results
 *.xml
 
-*/build
-cpp-backend-tests-practicum
+build
