@@ -8,6 +8,7 @@
 #include <iomanip> ///std::setprecision
 #include <mutex>
 #include <thread>
+#include <map>
 
 using std::cout;
 using std::endl;
@@ -97,10 +98,24 @@ enum class TRUCK_TYPE {
 	TONN_8 = 8,
 	TONN_16 = 16
 };
+using statistics = std::map<PACKAGE_TYPE, double>;
+statistics stat_global{ {PACKAGE_TYPE::TYPE_1,0.0},{PACKAGE_TYPE::TYPE_2,0.0},{PACKAGE_TYPE::TYPE_3,0.0},{PACKAGE_TYPE::TYPE_4,0.0} };
 
+std::mutex mtx_statistics;
 struct Truck {
 	Truck() {
 		type = static_cast<TRUCK_TYPE>(2 << GetRandomNumber(0, 3));
+	};
+	~Truck() {
+		statistics stat_this_truck{ {PACKAGE_TYPE::TYPE_1,0.0},{PACKAGE_TYPE::TYPE_2,0.0},{PACKAGE_TYPE::TYPE_3,0.0},{PACKAGE_TYPE::TYPE_4,0.0} };
+		for (auto& i : cargo) {
+			stat_this_truck[i->item_.type] += i->item_.weight;
+		}
+		mtx_statistics.lock();
+		for (auto& s : stat_global) {
+			s.second = (s.second + stat_this_truck[s.first]) / 2.0;
+		}
+		mtx_statistics.unlock();
 	};
 	TRUCK_TYPE type;
 	std::vector<ConcreteItemPtr> cargo;
@@ -169,12 +184,13 @@ struct Storage {
 
 		while(GetCapacity() > capacity_limit_){
 			auto send_items = [this] {
-				Truck truck;
+				
 				while (true) {
 					std::lock_guard lock(mtx_queue);
 					if (QueueSize() == 0) {
 						break;
 					}
+					Truck truck;
 					auto item_to_send = QueueFront();
 					double truck_capacity_new = truck.capacity_now_ + item_to_send->item_.weight;
 					if (CapacityFromTruck(truck) > truck_capacity_new) {
@@ -276,5 +292,17 @@ int main() {
 			
 		}
 	}
+
+	while (detached_thread_counter.load() != 0) {
+		///wait threads
+	}
 	///WORK END
+
+	///STATISTICS BEGIN
+	cout << "Average type of items in truck:" << endl;
+	cout << "type - amount:" << endl;
+	for (auto stat : stat_global) {
+		cout << static_cast<int>(stat.first)<<" - "<<std::setprecision(9)<<stat.second << endl;
+	}
+	///STATISTICS END
 };
